@@ -49,7 +49,11 @@ def mha(x, c_attn, c_proj, n_head):  # [n_seq, n_embd] -> [n_seq, n_embd]
     causal_mask = (1 - np.tri(x.shape[0], dtype=x.dtype)) * -1e10  # [n_seq, n_seq]
 
     # perform attention over each head
-    out_heads = [attention(q, k, v, causal_mask) for q, k, v in zip(*qkv_heads)]  # [3, n_head, n_seq, n_embd/n_head] -> [n_head, n_seq, n_embd/n_head]
+    out_heads = []
+    for q, k, v in zip(*qkv_heads):
+        out_heads.append(attention(q, k, v, causal_mask))
+        import pdb; pdb.set_trace()
+    #out_heads = [attention(q, k, v, causal_mask) for q, k, v in zip(*qkv_heads)]  # [3, n_head, n_seq, n_embd/n_head] -> [n_head, n_seq, n_embd/n_head]
 
     # merge heads
     x = np.hstack(out_heads)  # [n_head, n_seq, n_embd/n_head] -> [n_seq, n_embd]
@@ -120,40 +124,25 @@ def new_transformer(x, attn, ln_1, ln_2, mlp, n_head):
 
     res = []
 
-    def get_q(i, n_head, n_embd):
-        import pdb; pdb
-        pass
-    
-    def get_k(i, n_head, n_embd):
-        pass
-    
-    def get_v(i, n_head, n_embd):
-        pass
-
     n_embd = c_attn['w'].shape[-1] # (2304)
-    n_embd_per_head = n_embd // n_head
-    n_embd_per_head_per_mat = n_embd_per_head // 3
+    n_embd_per_head = n_embd // 12
     for i in range(n_head):
-        start = i * n_embd_per_head_per_mat
-        end = (i+1) * n_embd_per_head_per_mat
+        start = i*n_embd_per_head
+        end = (i+1)*n_embd_per_head
 
-        wq, wk, wv = np.split(c_attn['w'], 3, axis=-1)
-        bq, bk, bv = np.split(c_attn['b'], 3, axis=-1)
-
-        q = x @ wq[:, start:end] + bq[start:end]
-        k = x @ wk[:, start:end] + bk[start:end]
-        v = x @ wv[:, start:end] + bv[start:end]
+        qkv = x @ c_attn['w'][:, start:end] + c_attn['b'][start:end] # (10, 2304)
+        q, k, v = np.split(qkv, 3, axis=-1)
 
         mask = (1 - np.tri(x.shape[0], dtype=x.dtype)) * -1e10
-        attn = softmax_new(q @ k.T / np.sqrt(q.shape[-1]) + mask) @ v
+        attn = softmax_new(q @ k.T / k.shape[-1] ** 0.5 + mask) @ v
 
         res.append(attn)
 
-    #x = np.stack(res, axis=0)
-    #x = np.transpose(x, [1, 0, 2])
-    #x = np.reshape(x, (x.shape[0], -1))
+    x = np.stack(res, axis=0)
+    x = np.transpose(x, [1, 0, 2])
+    x = np.reshape(x, (x.shape[0], -1))
     # This is equivalent.
-    x = np.hstack(res)
+    #x = np.hstack(res)
 
     x = x @ attn_c_proj['w'] + attn_c_proj['b']
 
@@ -189,6 +178,7 @@ def gpt2_new(inputs, wte, wpe, blocks, ln_f, n_head): # [n_seq] -> [n_seq, n_voc
         ln_2 = block['ln_2']
         mlp = block['mlp']
         x = new_transformer(x, attn, ln_1, ln_2, mlp, n_head)
+        import pdb; pdb.set_trace()
     
     x = layer_norm_new(x, ln_f['g'], ln_f['b'])
     x = x @ wte.T
@@ -201,7 +191,7 @@ def generate(inputs, params, n_head, n_tokens_to_generate):
     from tqdm import tqdm
 
     for _ in tqdm(range(n_tokens_to_generate), "generating"):  # auto-regressive decode loop
-        logits = gpt2_new(inputs, **params, n_head=n_head)  # model forward pass
+        logits = gpt2(inputs, **params, n_head=n_head)  # model forward pass
         next_id = np.argmax(logits[-1])  # greedy sampling
         inputs.append(int(next_id))  # append prediction to input
 
